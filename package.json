@@ -1,0 +1,40 @@
+{
+    "name": "coursera-solver",
+    "version": "0.0.1",
+    "description": "",
+    "private": true,
+    "main": "src/index.js",
+    "scripts": {
+        "start": "node .",
+        "format": "prettier . --check",
+        "format:write": "prettier . --write",
+        "lint": "eslint .",
+        "lint:fix": "eslint . --fix",
+        "check": "pnpm run format && pnpm run lint",
+        "fix": "pnpm run format:write && pnpm run lint:fix"
+    },
+    "keywords": [
+        "coursera",
+        "course",
+        "activities"
+    ],
+    "author": "lucaaszsx",
+    "license": "MIT",
+    "packageManager": "pnpm@10.33.0",
+    "dependencies": {
+        "commander": "^15.0.0",
+        "dotenv": "^17.4.2",
+        "lodash": "^4.18.1",
+        "picocolors": "^1.1.1",
+        "puppeteer": "^25.1.0",
+        "puppeteer-extra": "^3.3.6",
+        "puppeteer-extra-plugin-stealth": "^2.11.2"
+    },
+    "devDependencies": {
+        "@eslint/js": "^10.0.1",
+        "eslint": "^10.4.1",
+        "globals": "^17.6.0",
+        "husky": "^9.1.7",
+        "prettier": "^3.8.4"
+    }
+}
