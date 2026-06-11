@@ -26,16 +26,20 @@ program.command('get-all')
 program.parse();*/
 
 require('dotenv').config();
-const { CourseraSolver, Events } = require('./structures/CourseraSolver');
-const solver = new CourseraSolver({
+const { CourseraClient } = require('./structures/CourseraClient');
+const { Events } = require('./utils/events');
+const client = new CourseraClient({
     credentials: {
         email: process.env.USER_EMAIL,
         password: process.env.USER_PASSWORD
     },
     course: 'ask-questions-make-decisions'
-}).on(Events.Debug, (...args) => console.log(...args));
+});
+
+client.on(Events.Debug, (...args) => console.log(...args));
 
 (async () => {
-    await solver.start();
-    console.log(await solver.fetchPendingActivities());
+    await client.start();
+    console.log(await client.solver.fetchPendingActivities());
+    await client.end();
 })();

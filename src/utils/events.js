@@ -1,0 +1,3 @@
+exports.Events = {
+    Debug: 'debug'
+};

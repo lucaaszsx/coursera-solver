@@ -1,5 +1,8 @@
 /** Pages */
-exports.LOGIN_PAGE = 'https://www.coursera.org/?authMode=login';
+const BASE_URL = 'https://www.coursera.org';
+
+exports.BASE_URL = BASE_URL;
+exports.LOGIN_PAGE = BASE_URL + '/?authMode=login';
 
 /** Selectors */
 exports.LOGIN_EMAIL_SELECTOR = 'input[name="email"]';

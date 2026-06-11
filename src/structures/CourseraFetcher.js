@@ -11,15 +11,15 @@
 
 class CourseraFetcher {
     /**
-     * @param {import('puppeteer').Page} page - Active Puppeteer page used to run in-browser fetches
-     * @param {(args: any[]) => void} debugFn - Callback used to emit debug messages
-     */
-    constructor(page, debugFn) {
+     * @param {import('./CourseraClient').CourseraClient} client
+     * @param {import('puppeteer').Page} page
+    */
+   constructor(client, page) {
+        /** @type {import('./CourseraClient').CourseraClient} */
+        this.client = client;
+        
         /** @type {import('puppeteer').Page} */
         this.page = page;
-
-        /** @type {(...args: any[]) => void} */
-        this._debug = debugFn ?? (() => {});
     }
 
     async getAllActivities(userId, courseId, courseSlug) {

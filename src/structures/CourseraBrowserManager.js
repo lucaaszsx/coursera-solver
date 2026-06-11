@@ -1,9 +1,8 @@
-const { EventEmitter } = require('node:events');
-const { differenceBy } = require('lodash');
+const { differenceBy, merge } = require('lodash');
+const { getCourseHomePage } = require('../utils');
 const Constants = require('../utils/constants');
 const puppeteer = require('puppeteer-extra');
 const path = require('node:path');
-const pc = require('picocolors');
 
 // Setup stealth plugin
 puppeteer.use(require('puppeteer-extra-plugin-stealth')());
@@ -28,28 +27,22 @@ puppeteer.use(require('puppeteer-extra-plugin-stealth')());
  */
 
 /**
- * @typedef {Object} LoginManagerOptions
- * @property {import('puppeteer').LaunchOptions} browser - Puppeteer launch options for the browser instance.
- * @property {Credentials} credentials - Account credentials used for login.
+ * @typedef {Object} BrowserManagerOptions
+ * @property {import('puppeteer').LaunchOptions} launch - Puppeteer launch options for the browser instance.
  * @property {LoginOptions} login - Options controlling the login flow behaviour.
  * @property {boolean} useDataDir - Whether a persistent user data directory should be used.
  */
 
-/** CourseraLoginManager related events */
-const Events = {
-    Debug: 'debug'
-};
-
 /**
  * Manages browser, page setup and Coursera authentication
  */
-class CourseraLoginManager extends EventEmitter {
+exports.CourseraBrowserManager = class CourseraBrowserManager {
     static DEFAULT_USER_DATA_DIR = path.join(__dirname, '../../browser');
     static AUTH_COOKIE = 'CAUTH';
 
-    /** @type {LoginManagerOptions} */
+    /** @type {BrowserManagerOptions} */
     static DEFAULT_OPTS = {
-        browser: {
+        launch: {
             headless: false,
             args: [
                 '--no-sandbox',
@@ -84,23 +77,26 @@ class CourseraLoginManager extends EventEmitter {
     };
 
     /**
-     * @param {LoginManagerOptions} options
-     * @param {(args: any[]) => void} debugFn - Callback used to emit debug messages
+     * @param {import('./CourseraClient').CourseraClient} client
      */
-    constructor(options, debugFn) {
-        super();
+    constructor(client) {
+        /** @type {BrowserManagerOptions} */
+        this.options = merge({}, CourseraBrowserManager.DEFAULT_OPTS, client.options.browser);
 
-        /** @type {LoginManagerOptions} */
-        this.options = options;
-
-        /** @type {(args: any[]) => void} */
-        this._debug = debugFn ?? ((...args) => this.emit(Events.Debug, pc.blue(`[debug] [${new Date().toUTCString()}]`), ...args));
+        if (!this.options.launch.userDataDir && this.options.useDataDir)
+            this.options.launch.userDataDir = CourseraBrowserManager.DEFAULT_USER_DATA_DIR;
+        
+        /** @type {Credentials} */
+        this.credentials = this.options.credentials;
 
         /** @type {import('puppeteer').Browser | null} */
         this.browser = null;
 
         /** @type {import('puppeteer').Page | null} */
         this.currentPage = null;
+
+        /** @type {import('./CourseraClient')} */
+        this.client = client;
     }
 
     get ready() {
@@ -108,12 +104,12 @@ class CourseraLoginManager extends EventEmitter {
     }
 
     async launch() {
-        this._debug('Starting browser and initial page...');
+        this.#debug('Starting browser and initial page...');
 
-        this.browser = await puppeteer.launch(this.options.browser);
+        this.browser = await puppeteer.launch(this.options.launch);
         this.currentPage = await this.browser.newPage();
 
-        this._debug('Browser and page successfully opened!');
+        this.#debug('Browser and page successfully opened!');
 
         await this.#setupInterceptor();
     }
@@ -127,72 +123,77 @@ class CourseraLoginManager extends EventEmitter {
     }
 
     async isLogged() {
+        this.#mustBeReady();
         const cookies = await this.#getCookies();
-        return cookies.findIndex((cookie) => cookie.name === CourseraLoginManager.AUTH_COOKIE) > -1;
+        return cookies.findIndex((cookie) => cookie.name === CourseraBrowserManager.AUTH_COOKIE) > -1;
     }
 
     async login() {
         this.#mustBeReady();
+        this.#debug('Starting login attempt...');
 
-        this._debug('Starting login attempt...');
         if (await this.isLogged()) {
-            this._debug('User already logged in. Skipping login attempt.');
+            this.#debug('User already logged in. Skipping login attempt.');
             return;
         }
 
         await this.currentPage.goto(Constants.LOGIN_PAGE, { waitUntil: 'domcontentloaded' });
 
-        const { login: loginOpts } = this.options;
+        const { typingDelay, timeout } = this.options.login;
+        const beforeCookies = await this.#getCookies();
 
         // Enter the email address and submit
-        this._debug('Waiting for e-mail selector to start typing...');
+        this.#debug('Waiting for e-mail selector to start typing...');
         await this.currentPage.waitForSelector(Constants.LOGIN_EMAIL_SELECTOR, {
-            timeout: loginOpts.timeout.selectors,
+            timeout: timeout.selectors,
             visible: true
         });
         await this.currentPage.focus(Constants.LOGIN_EMAIL_SELECTOR);
         await this.currentPage.type('input[name="email"]', this.options.credentials.email, {
-            delay: loginOpts.typingDelay
+            delay: typingDelay
         });
         await this.currentPage.keyboard.press('Enter');
 
         // Enter the password and submit
-        this._debug('Waiting for password selector to start typing...');
+        this.#debug('Waiting for password selector to start typing...');
         await this.currentPage.waitForSelector(Constants.LOGIN_PASSWORD_SELECTOR, {
-            timeout: loginOpts.timeout.selectors,
+            timeout: timeout.selectors,
             visible: true
         });
         await this.currentPage.focus(Constants.LOGIN_PASSWORD_SELECTOR);
         await this.currentPage.type('input[name="password"]', this.options.credentials.password, {
-            delay: loginOpts.typingDelay
+            delay: typingDelay
         });
         await this.currentPage.keyboard.press('Enter');
 
-        const beforeCookies = await this.#getCookies();
         const result = await Promise.race([
-            this.#waitForAuthCookie(loginOpts.timeout.login).then((success) => ({ success })),
+            this.#waitForAuthCookie(timeout.login).then((success) => ({ success })),
             this.currentPage
-                .waitForSelector(Constants.LOGIN_FAILED_SELECTOR, { timeout: loginOpts.timeout.login })
+                .waitForSelector(Constants.LOGIN_FAILED_SELECTOR, { timeout: timeout.login })
                 .then(() => ({ success: false }))
         ]);
 
         if (result.success) {
-            this._debug('Login successfully!');
+            this.#debug('Login successfully!');
 
             const afterCookies = await this.#getCookies();
             const addedCookies = differenceBy(afterCookies, beforeCookies, 'name').map((c) => c.name);
-            this._debug('Added cookies after login:', addedCookies.join(' | '));
+            this.#debug('Added cookies after login:', addedCookies.join(' | '));
         } else {
-            const errorMessage = await this.currentPage.$eval(
-                Constants.LOGIN_FAILED_SELECTOR,
-                (el) => el.textContent?.trim()
-            );
-            throw new Error(`Failed to login: ${errorMessage}`);
+            const errorElement = await this.currentPage.$(Constants.LOGIN_FAILED_SELECTOR);
+
+            if (errorElement) {
+                const errorMessage = await errorElement.evaluate((el) => el.textContent?.trim());
+                throw new Error(`Failed to login: ${errorMessage}`);
+            }
+
+            throw new Error('Failed to log in due to an unknown reason');
         }
     }
 
     async navigateToCourse(courseSlug) {
-        this._debug('Navigating to course home...');
+        this.#mustBeReady();
+        this.#debug('Navigating to course home...');
 
         const { page: pageTimeout } = this.options.login.timeout;
 
@@ -202,19 +203,19 @@ class CourseraLoginManager extends EventEmitter {
         );
 
         await this.currentPage.goto(
-            `https://www.coursera.org/learn/${courseSlug}/home/welcome`,
+            getCourseHomePage(courseSlug),
             { waitUntil: 'domcontentloaded', timeout: pageTimeout }
         );
 
-        const gradesRes = await gradesPromise;
-        const match = gradesRes.url().match(/onDemandCourseViewGrades\.v1\/(\d+)~([^?]+)/);
+        const gradesResponse = await gradesPromise;
+        const match = gradesResponse.url().match(/onDemandCourseViewGrades\.v1\/(\d+)~([^?]+)/);
 
         if (match) {
-            this._debug(`Resolved ids: userId=${match[1]} courseId=${match[2]}`);
+            this.#debug(`Resolved identifiers: userId=${match[1]} courseId=${match[2]}`);
             return { userId: match[1], courseId: match[2] };
         }
 
-        this._debug('Course page loaded!');
+        this.#debug('Course page loaded!');
         return null;
     }
 
@@ -227,8 +228,8 @@ class CourseraLoginManager extends EventEmitter {
         const start = Date.now();
 
         while (Date.now() - start < timeout) {
-            const cookies = await this.currentPage.cookies();
-            if (cookies.some((c) => c.name === CourseraLoginManager.AUTH_COOKIE)) return true;
+            const cookies = await this.#getCookies();
+            if (cookies.some((c) => c.name === CourseraBrowserManager.AUTH_COOKIE)) return true;
 
             await new Promise((resolve) => setTimeout(resolve, 250));
         }
@@ -238,7 +239,7 @@ class CourseraLoginManager extends EventEmitter {
 
     async #setupInterceptor() {
         this.#mustBeReady();
-        this._debug('Starting interceptors setup');
+        this.#debug('Starting interceptors setup');
 
         await this.currentPage.setRequestInterception(true);
 
@@ -256,7 +257,7 @@ class CourseraLoginManager extends EventEmitter {
             if (Constants.BLOCKED_DOMAINS.has(hostname)) return req.abort();
             if (Constants.COURSERA_DOMAINS.has(hostname)) return req.continue();
             if (type === 'script' || type === 'media' || type === 'image') {
-                this._debug(`[interceptor] blocked unknown third-party [${type}]: ${hostname}`);
+                this.#debug(`[interceptor] blocked unknown third-party [${type}]: ${hostname}`);
                 return req.abort();
             }
 
@@ -267,6 +268,8 @@ class CourseraLoginManager extends EventEmitter {
     #mustBeReady() {
         if (!this.ready) throw new Error('Missing initialization of browser or page');
     }
-}
 
-module.exports = { CourseraLoginManager, Events };
+    #debug(...args) {
+        this.client.debug(...args);
+    }
+}
